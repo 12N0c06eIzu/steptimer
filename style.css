@@ -66,6 +66,8 @@ h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.04em;flex:1}
 .bar-top select,.bar-top #presetName{flex:1;min-width:0;font-family:var(--f-ui);font-size:15px;font-weight:700;padding:9px 12px;border-radius:12px;border:0;background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgb(30 20 60 / .06)}
 .startat{display:flex;align-items:center;gap:6px;background:var(--surface);border-radius:12px;padding:4px 4px 4px 12px;font-size:12px;color:var(--muted);box-shadow:0 1px 2px rgb(30 20 60 / .06);flex-shrink:0}
 .startat input{font-family:var(--f-num);font-size:14px;border:0;background:var(--sunk);color:var(--fg);border-radius:8px;padding:5px 6px}
+#modeBtn{flex-shrink:0;font-size:16px;border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgb(30 20 60 / .06)}
+#modeBtn.on{background:var(--accent-soft);color:var(--accent)}
 .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;min-width:200px;box-shadow:0 10px 30px rgb(20 10 40 / .18)}
 .menu button{text-align:left;padding:9px 12px;border-radius:8px}
 .menu button:hover:not(:disabled){background:var(--sunk)}
@@ -87,6 +89,7 @@ li input{font-family:var(--f-ui);font-size:15px;border:1px solid transparent;bac
 li input:hover,li input:focus{border-color:var(--line);background:var(--surface)}
 li .mins{display:flex;align-items:center;font-size:12px;color:var(--muted)}
 li .mins input{font-family:var(--f-num);width:46px;text-align:right;padding-inline:4px}
+li .mins input[type=time]{width:auto;text-align:left;font-size:14px}
 li .del{width:28px;height:28px;color:var(--muted);font-size:16px;opacity:.5}
 li .del:hover{opacity:1;color:var(--late);background:var(--late-soft)}
 @media (hover:hover){li .del{opacity:0} li:hover .del,li .del:focus-visible{opacity:.6}}

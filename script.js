@@ -1,13 +1,14 @@
 const $=id=>document.getElementById(id);
 const DEFAULT=[["リクイン受付",5],["説明・部屋へ案内",5],["第1ローテ",20],["写真撮影",3],["入れ替え",2,"撮影が終わったらキャストのみ退室。第2で当たるゲストの情報を軽くチェックOK"],["第2ローテ",20],["写真撮影",3],["退室",2,"撮影が終わったらキャスト＋ゲスト退室"],["集合写真・閉め",10]];
 let uid=1;
-const mk=(name,min,kind="step",note="")=>({id:uid++,name,min,kind,note});
+const mk=(name,min,kind="step",note="",at="")=>({id:uid++,name,min,kind,note,at});
+const TIME_RE=/^\d{2}:\d{2}$/;
 
 /* ---------- state ---------- */
 const KEY="stepTimer_v6";
-const freshRun=()=>({idx:0,remain:0,running:false,endAt:0,begun:false,actStart:{},actEnd:{},ext:{}});
+const freshRun=()=>({idx:0,remain:0,tot:0,hold:false,running:false,endAt:0,begun:false,actStart:{},actEnd:{},ext:{}});
 // 初回は空のタイムテーブルが1つだけ
-const blankPreset=(name="タイムテーブル")=>({id:"p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),name,start:"",steps:[mk("ステップ1",10)]});
+const blankPreset=(name="タイムテーブル")=>({id:"p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),name,start:"",mode:"dur",steps:[mk("ステップ1",10)]});
 let store={presets:[blankPreset()],activeId:null,opts:null};
 store.activeId=store.presets[0].id;
 let cur=store.presets[0],steps=cur.steps,run=freshRun();
@@ -33,7 +34,8 @@ function load(){
     }
   }catch(e){}
   uid=Math.max(0,...store.presets.flatMap(p=>p.steps.map(s=>s.id||0)))+1;
-  store.presets.forEach(p=>p.steps.forEach(s=>{if(!s.id)s.id=uid++;s.kind=s.kind||"step";s.note=s.note||""}));
+  store.presets.forEach(p=>p.steps.forEach(s=>{if(!s.id)s.id=uid++;s.kind=s.kind||"step";s.note=s.note||"";s.at=TIME_RE.test(s.at)?s.at:""}));
+  store.presets.forEach(p=>{p.mode=p.mode==="clock"?"clock":"dur"});
   cur=store.presets.find(p=>p.id===store.activeId)||store.presets[0];store.activeId=cur.id;steps=cur.steps;
   $("startAt").value=cur.start||"";
   const o=store.opts;if(o){$("sound").value=o.sound;$("vol").value=o.vol;$("pre").checked=o.pre;$("auto").checked=o.auto}
@@ -53,15 +55,15 @@ function switchTo(id){
   if(run.running)pause();
   cur=store.presets.find(p=>p.id===id)||store.presets[0];store.activeId=cur.id;steps=cur.steps;
   $("startAt").value=cur.start||"";
-  run=freshRun();run.remain=dur(steps[0]);preFired=false;
-  renderPresets();renderAll();save();
+  run=freshRun();setRemain(steps[0],Date.now());preFired=false;
+  renderPresets();renderMode();renderAll();save();
 }
 function uniqueName(base){let n=base,i=2;while(store.presets.some(p=>p.name===n))n=`${base} (${i++})`;return n}
 function addPreset(p){store.presets.push(p);switchTo(p.id)}
 const newId=()=>"p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 $("preset").onchange=e=>switchTo(e.target.value);
-$("pNew").onclick=()=>{addPreset({id:newId(),name:uniqueName("新しいタイムテーブル"),start:"",steps:[mk("ステップ1",10)]});say("新しいタイムテーブルを作ったよ");startRename()};
-$("pDup").onclick=()=>{addPreset({id:newId(),name:uniqueName(cur.name+" のコピー"),start:cur.start,steps:cur.steps.map(s=>mk(s.name,s.min,s.kind,s.note))});say("複製したよ")};
+$("pNew").onclick=()=>{addPreset({id:newId(),name:uniqueName("新しいタイムテーブル"),start:"",mode:"dur",steps:[mk("ステップ1",10)]});say("新しいタイムテーブルを作ったよ");startRename()};
+$("pDup").onclick=()=>{addPreset({id:newId(),name:uniqueName(cur.name+" のコピー"),start:cur.start,mode:cur.mode,steps:cur.steps.map(s=>mk(s.name,s.min,s.kind,s.note,s.at))});say("複製したよ")};
 function startRename(){
   const inp=$("presetName");inp.value=cur.name;inp.hidden=false;$("preset").hidden=true;inp.focus();inp.select();
 }
@@ -84,13 +86,13 @@ $("pDel").onclick=()=>{
 };
 /* 共有コード: タイムテーブルを文字列にして、ほかの人や端末に渡す */
 const PREFIX="STEPTIMER:";
-function encodePreset(p){return PREFIX+btoa(unescape(encodeURIComponent(JSON.stringify({n:p.name,t:p.start,s:p.steps.map(x=>[x.name,x.min,x.kind==="delay"?1:0,x.note||""])}))))}
+function encodePreset(p){return PREFIX+btoa(unescape(encodeURIComponent(JSON.stringify({n:p.name,t:p.start,m:p.mode,s:p.steps.map(x=>[x.name,x.min,x.kind==="delay"?1:0,x.note||"",x.at||""])}))))}
 function decodePreset(code){
   const raw=code.trim().replace(/^STEPTIMER:/,"");
   const d=JSON.parse(decodeURIComponent(escape(atob(raw))));
   if(!d||!Array.isArray(d.s)||!d.s.length)throw 0;
-  const st=d.s.map(([n,m,k,note])=>mk(String(n||"ステップ").slice(0,60),Math.max(1,Math.round(+m)||1),k?"delay":"step",String(note||"").slice(0,200)));
-  return {id:newId(),name:uniqueName(String(d.n||"読み込んだタイムテーブル").slice(0,40)),start:/^\d{2}:\d{2}$/.test(d.t)?d.t:"",steps:st};
+  const st=d.s.map(([n,m,k,note,at])=>mk(String(n||"ステップ").slice(0,60),Math.max(1,Math.round(+m)||1),k?"delay":"step",String(note||"").slice(0,200),TIME_RE.test(at)?at:""));
+  return {id:newId(),name:uniqueName(String(d.n||"読み込んだタイムテーブル").slice(0,40)),start:TIME_RE.test(d.t)?d.t:"",mode:d.m==="clock"?"clock":"dur",steps:st};
 }
 $("pExport").onclick=()=>{
   const code=encodePreset(cur);
@@ -107,7 +109,37 @@ $("importOk").onclick=()=>{
 /* ---------- time helpers ---------- */
 const fmt=s=>{s=Math.max(0,Math.ceil(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+":"+String(m).padStart(2,"0"):String(m).padStart(2,"0"))+":"+String(x).padStart(2,"0")};
 const hm=t=>{const d=new Date(t);return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")};
-const dur=(s,i)=>s.min*60+(run.ext[s.id]||0);
+const isClock=()=>cur.mode==="clock";
+/* 時刻指定モードの基準: 開始時刻 → 実際の開始 → 現在 の順 */
+function clockBase(){
+  const b=planBase();if(b!==null)return b;
+  const f=run.begun&&steps[0]&&run.actStart[steps[0].id];
+  return f||Date.now();
+}
+/* 各ステップの終了時刻を、直前の終了以降で一番近い日時に決める（遅延枠は対象外）。at が空なら min で代替 */
+function clockEnds(base){
+  const out={};let p=base;
+  steps.forEach(s=>{
+    if(s.kind!=="step")return;
+    let t;
+    if(TIME_RE.test(s.at)){
+      const [h,m]=s.at.split(":").map(Number),d=new Date(p);d.setHours(h,m,0,0);t=d.getTime();
+      const floor=Math.floor(p/60000)*60000;
+      while(t<floor)t+=864e5;
+    } else t=p+s.min*60e3;
+    out[s.id]=p=t;
+  });
+  return out;
+}
+/* ステップの長さ(秒)。start はそのステップを始める時刻(ms) */
+function dur(s,start){
+  const ext=run.ext[s.id]||0;
+  if(isClock()&&s.kind==="step")return Math.max(60,(clockEnds(clockBase())[s.id]-start)/1000)+ext;
+  return s.min*60+ext;
+}
+function setRemain(s,start){run.remain=dur(s,start);run.tot=run.remain}
+const totOf=s=>isClock()?(run.tot||dur(s,Date.now())):dur(s,0);
+const shiftAt=(at,sec)=>{const [h,m]=at.split(":").map(Number),v=((h*60+m+Math.round(sec/60))%1440+1440)%1440;return String(Math.floor(v/60)).padStart(2,"0")+":"+String(v%60).padStart(2,"0")};
 function planBase(){
   const v=$("startAt").value;if(!v)return null;
   const [h,m]=v.split(":").map(Number);const d=new Date();d.setHours(h,m,0,0);
@@ -121,16 +153,21 @@ function planBase(){
 }
 /* 予定: start time + planned minutes (delay rows excluded). 見込み: actual / live projection. */
 function compute(){
-  const now=Date.now(),base=planBase(),out=[];
+  const now=Date.now(),base=planBase(),out=[],clock=isClock();
+  const ends=clock?clockEnds(clockBase()):null;
   let p=base,t;
   steps.forEach((s,i)=>{
     const r={};
-    if(s.kind==="step"&&p!==null){r.ps=p;r.pe=p+s.min*60e3;p=r.pe}
+    if(s.kind==="step"){
+      if(clock){r.ps=p;r.pe=ends[s.id];p=r.pe}
+      else if(p!==null){r.ps=p;r.pe=p+s.min*60e3;p=r.pe}
+    }
     if(i<run.idx){r.as=run.actStart[s.id];r.ae=run.actEnd[s.id];t=r.ae}
     else if(i===run.idx){
-      r.as=run.begun?(run.actStart[s.id]??now):Math.max(now,base??now);
-      r.ae=(run.begun?now:r.as)+run.remain*1000;t=r.ae;
-    } else {r.as=t;r.ae=t+dur(s)*1000;t=r.ae}
+      const waiting=clock&&(!run.begun||run.hold);   // 時刻指定で未開始: 終わりは予定の終了時刻に固定
+      r.as=run.begun&&!(clock&&run.hold)?(run.actStart[s.id]??now):Math.max(now,base??now);
+      r.ae=(waiting?now:run.begun?now:r.as)+run.remain*1000;t=r.ae;
+    } else {r.as=t;r.ae=t+dur(s,t)*1000;t=r.ae}
     out.push(r);
   });
   return {rows:out,planEnd:p,projEnd:t};
@@ -145,19 +182,35 @@ function renderList(){
   steps.forEach((s,i)=>{
     const li=document.createElement("li");li.dataset.i=i;
     li.innerHTML=`<span class="n">${s.kind==="delay"?"⏸":i+1}</span>
-      <input class="name" aria-label="ステップ名"><span class="mins"><input class="min" type="number" min="1" step="1" inputmode="numeric" aria-label="分">分</span>
+      <input class="name" aria-label="ステップ名">${isClock()&&s.kind==="step"
+        ?`<span class="mins"><input class="at" type="time" aria-label="終了時刻"></span>`
+        :`<span class="mins"><input class="min" type="number" min="1" step="1" inputmode="numeric" aria-label="分">分</span>`}
       <button class="del" aria-label="削除">×</button><div class="times"></div>`;
-    const nm=li.querySelector(".name"),mn=li.querySelector(".min");
-    nm.id="name"+s.id;mn.id="min"+s.id;nm.value=s.name;mn.value=s.min;
+    const nm=li.querySelector(".name"),mn=li.querySelector(".min"),at=li.querySelector(".at");
+    nm.id="name"+s.id;nm.value=s.name;
     nm.oninput=()=>{s.name=nm.value;save();renderDial()};
-    mn.onchange=()=>{const v=Math.round(parseFloat(mn.value));if(!(v>=1)){mn.value=s.min;return}mn.value=v;
-      const diff=(v-s.min)*60;s.min=v;
-      if(i===run.idx){run.remain=Math.max(1,run.remain+diff);if(run.running)run.endAt=Date.now()+run.remain*1000}
-      save();renderAll()};
+    if(mn){
+      mn.id="min"+s.id;mn.value=s.min;
+      mn.onchange=()=>{const v=Math.round(parseFloat(mn.value));if(!(v>=1)){mn.value=s.min;return}mn.value=v;
+        const diff=(v-s.min)*60;s.min=v;
+        if(i===run.idx){const old=run.remain;run.remain=Math.max(1,run.remain+diff);run.tot=(run.tot||old)+(run.remain-old);if(run.running)run.endAt=Date.now()+run.remain*1000}
+        save();renderAll()};
+    }
+    if(at){
+      at.id="at"+s.id;at.value=s.at;
+      at.onchange=()=>{
+        const old=clockEnds(clockBase())[s.id];
+        s.at=at.value;
+        // 今のステップなら、残り時間を終了時刻の差分だけ動かす
+        if(i===run.idx){const old0=run.remain,diff=(clockEnds(clockBase())[s.id]-old)/1000;
+          run.remain=Math.max(1,run.remain+diff);run.tot=(run.tot||old0)+(run.remain-old0);
+          if(run.running)run.endAt=Date.now()+run.remain*1000}
+        save();renderAll()};
+    }
     li.querySelector(".del").onclick=()=>{
       if(steps.length<=1||i<run.idx)return;
       steps.splice(i,1);
-      if(i===run.idx){if(run.idx>=steps.length)run.idx=steps.length-1;run.remain=dur(steps[run.idx]);if(run.running)run.endAt=Date.now()+run.remain*1000}
+      if(i===run.idx){if(run.idx>=steps.length)run.idx=steps.length-1;setRemain(steps[run.idx],Date.now());if(run.running)run.endAt=Date.now()+run.remain*1000}
       save();renderAll()};
     list.appendChild(li);
   });
@@ -174,11 +227,12 @@ function update(){
     const i=+li.dataset.i,s=steps[i],r=c.rows[i];
     li.className=(i<run.idx?"done ":i===run.idx?"active ":"")+(s.kind==="delay"?"delay":"");
     let h="";
-    if(r.ps!=null)h+=`<span>予定 ${hm(r.ps)}–${hm(r.pe)}</span>`;
+    if(r.pe!=null)h+=`<span>予定 ${r.ps!=null?hm(r.ps)+"–":"〜"}${hm(r.pe)}</span>`;
     else if(s.kind==="delay")h+=`<span>遅延枠</span>`;
     if(r.as!=null){
       const lbl=i<run.idx?"実績":"見込み";
-      const m=r.ps!=null?diffMin(r.as,r.ps):null;
+      // 時刻指定は終了時刻が固定なので、終わりのずれを見る
+      const m=isClock()&&r.pe!=null?diffMin(r.ae,r.pe):r.ps!=null?diffMin(r.as,r.ps):null;
       // 予定どおりなら見込みは省略して、ずれたときだけ出す
       if(m===null||m!==0||i<run.idx)h+=`<span class="proj">${lbl} ${hm(r.as)}–${hm(r.ae)}</span>`;
       if(m)h+=`<span class="d ${lagClass(m)}">${lagText(m)}</span>`;
@@ -199,7 +253,7 @@ function renderDial(){
   $("stepname").textContent=s.name;
   $("next").textContent=nx?"次 → "+nx.name:"ラストのステップ";
   $("note").hidden=!s.note;$("note").textContent=s.note||"";
-  $("bar").style.width=Math.min(100,100*(1-run.remain/dur(s)))+"%";
+  $("bar").style.width=Math.min(100,100*(1-run.remain/Math.max(1,totOf(s))))+"%";
   $("pos").textContent=`STEP ${run.idx+1} / ${steps.length}`+(s.kind==="delay"?"・遅延枠":"");
   $("backBtn").disabled=run.idx===0;$("skipBtn").disabled=run.idx+1>=steps.length;
   $("startBtn").textContent=run.running?"一時停止":run.begun?"再開":"スタート";
@@ -231,16 +285,16 @@ function chime(kind){
 function loop(){
   run.remain=(run.endAt-Date.now())/1000;
   const s=steps[run.idx];
-  if(!preFired&&$("pre").checked&&run.remain<=60&&run.remain>0&&dur(s)>90){preFired=true;chime("pre")}
+  if(!preFired&&$("pre").checked&&run.remain<=60&&run.remain>0&&totOf(s)>90){preFired=true;chime("pre")}
   if(run.remain<=0){
     const fresh=run.remain>-5;
     run.actEnd[s.id]=run.endAt;
     if(run.idx+1<steps.length){
       if(fresh)chime("step");
       run.idx++;preFired=false;const n=steps[run.idx];
-      run.actStart[n.id]=run.endAt;run.remain=dur(n);
+      run.actStart[n.id]=run.endAt;setRemain(n,run.endAt);
       if($("auto").checked){run.endAt+=run.remain*1000;run.remain=(run.endAt-Date.now())/1000}
-      else{run.running=false;clearInterval(tick);releaseWake();run.begun=true}
+      else{run.running=false;clearInterval(tick);releaseWake();run.begun=true;run.hold=true}
       save();renderAll();return;
     } else {
       if(fresh)chime("final");run.remain=0;run.running=false;clearInterval(tick);releaseWake();save();renderAll();
@@ -250,7 +304,10 @@ function loop(){
   renderDial();
 }
 function start(){
-  ac();const s=steps[run.idx];
+  ac();const s=steps[run.idx],now=Date.now();
+  // 時刻指定: スタートを押した時刻から終了時刻までを数え直す
+  if(isClock()&&(!run.begun||run.hold)){setRemain(s,now);if(run.hold)run.actStart[s.id]=now}
+  run.hold=false;
   if(!run.begun||run.actStart[s.id]==null)run.actStart[s.id]=Date.now();
   run.begun=true;run.running=true;run.endAt=Date.now()+run.remain*1000;
   clearInterval(tick);tick=setInterval(loop,200);requestWake();save();renderAll();
@@ -260,8 +317,9 @@ function skip(){
   if(run.idx+1>=steps.length)return;
   const now=Date.now(),s=steps[run.idx];
   if(run.begun){run.actStart[s.id]??=now;run.actEnd[s.id]=now}
-  run.idx++;preFired=false;const n=steps[run.idx];run.remain=dur(n);
+  run.idx++;preFired=false;const n=steps[run.idx];setRemain(n,now);
   if(run.begun)run.actStart[n.id]=now;
+  run.hold=run.begun&&!run.running;
   if(run.running)run.endAt=now+run.remain*1000;
   save();renderAll();
 }
@@ -273,14 +331,18 @@ function back(){
   run.idx--;preFired=false;const p=steps[run.idx];
   delete run.actEnd[p.id];
   if(run.begun)run.actStart[p.id]=now;
-  run.remain=dur(p);
+  setRemain(p,now);
+  run.hold=run.begun&&!run.running;
   if(run.running)run.endAt=now+run.remain*1000;
   save();renderAll();
 }
 function extend(sec){
   const s=steps[run.idx];
   const nr=Math.max(1,run.remain+sec);sec=nr-run.remain;
-  run.ext[s.id]=(run.ext[s.id]||0)+sec;run.remain=nr;
+  // 時刻指定: 終了時刻そのものを前後にずらす
+  if(isClock()&&s.kind==="step"&&s.at){s.at=shiftAt(s.at,sec);const e=$("at"+s.id);if(e)e.value=s.at}
+  else run.ext[s.id]=(run.ext[s.id]||0)+sec;
+  run.tot=(run.tot||run.remain)+sec;run.remain=nr;
   if(run.running)run.endAt=Date.now()+run.remain*1000;
   save();renderDial();update();
 }
@@ -290,13 +352,41 @@ $("backBtn").onclick=back;
 $("resetBtn").onclick=()=>{pause();
   // 遅延ステップは消して、通常のステップだけに戻す
   cur.steps=steps=steps.filter(s=>s.kind!=="delay");
-  run=freshRun();run.remain=dur(steps[0]);preFired=false;save();renderAll()};
+  run=freshRun();setRemain(steps[0],Date.now());preFired=false;save();renderAll()};
 $("testBtn").onclick=()=>chime("step");
 $("plus1").onclick=()=>extend(60);
 $("plus5").onclick=()=>extend(300);
 $("minus1").onclick=()=>extend(-60);
 $("insDelay").onclick=()=>{steps.splice(run.idx+1,0,mk("遅延",5,"delay"));save();renderAll()};
-$("addBtn").onclick=()=>{steps.push(mk("新しいステップ",5));save();renderAll()};
+$("addBtn").onclick=()=>{
+  const n=mk("新しいステップ",5);
+  if(isClock()){
+    // 直前のステップの終了時刻の5分後
+    const ends=clockEnds(clockBase()),last=steps.filter(x=>x.kind==="step").pop();
+    n.at=hm((last?ends[last.id]:clockBase())+5*60e3);
+  }
+  steps.push(n);save();renderAll()};
+function renderMode(){
+  const b=$("modeBtn"),c=isClock();
+  b.textContent=c?"⏰":"⏱";b.classList.toggle("on",c);
+  b.title=c?"時刻指定モード（押すと分指定に切り替え）":"分指定モード（押すと時刻指定に切り替え）";
+}
+/* 今の予定が変わらないように値を変換して切り替える */
+$("modeBtn").onclick=()=>{
+  if(run.begun){say("進行中は切り替えられないよ。リセットしてからにしてね");return}
+  if(!isClock()){
+    if(!$("startAt").value){$("startAt").value=hm(Date.now());cur.start=$("startAt").value}
+    let p=planBase();
+    steps.forEach(s=>{if(s.kind==="step"){p+=s.min*60e3;s.at=hm(p)}});
+    cur.mode="clock";
+  } else {
+    let p=clockBase();const ends=clockEnds(p);
+    steps.forEach(s=>{if(s.kind==="step"){s.min=Math.max(1,Math.round((ends[s.id]-p)/60000));p=ends[s.id]}});
+    cur.mode="dur";
+  }
+  setRemain(steps[run.idx],Date.now());
+  renderMode();save();renderAll();
+};
 $("startAt").onchange=()=>{save();update()};
 ["sound","vol","pre","auto"].forEach(id=>$(id).onchange=save);
 
@@ -312,7 +402,12 @@ async function requestWake(){try{wake=await navigator.wakeLock?.request("screen"
 function releaseWake(){try{wake&&wake.release();wake=null}catch(e){}}
 
 load();
-if(!run.begun)run.remain=dur(steps[run.idx]);
-renderPresets();renderAll();
+if(!run.begun)setRemain(steps[run.idx],Date.now());
+renderPresets();renderMode();renderAll();
 if(run.running){tick=setInterval(loop,200)}
-setInterval(()=>{$("now").textContent=new Date().toTimeString().slice(0,8);update()},1000);
+setInterval(()=>{
+  $("now").textContent=new Date().toTimeString().slice(0,8);
+  // 時刻指定の開始前は、今から終了時刻までを数え直す
+  if(isClock()&&!run.running&&(!run.begun||run.hold)){setRemain(steps[run.idx],Date.now());renderDial()}
+  update();
+},1000);
